@@ -589,6 +589,46 @@ def snap_boxes(
     return cast(npt.NDArray[np.float32], result.astype(np.float32, copy=False))
 
 
+def _integral_tracker_ids(
+    tracker_id: npt.NDArray[np.generic],
+) -> npt.NDArray[np.int_]:
+    """Return `tracker_id` as integers, rejecting ids that cannot name one track.
+
+    Casting a fractional id to an integer truncates it, so `2.2` and `2.7` would
+    share one trail, and casting a non-finite or out-of-range value yields an
+    arbitrary id. Both are refused instead, as
+    :class:`~supervision.detection.tools.polygon_zone.PolygonZone` already does
+    with a `tracker_id` it cannot use.
+
+    Args:
+        tracker_id: Per-detection tracker ids.
+
+    Returns:
+        The tracker ids as the default integer dtype.
+
+    Raises:
+        ValueError: If an id is fractional, non-finite, or outside the `int64`
+            range.
+    """
+    ids = np.asarray(tracker_id)
+    if ids.dtype.kind in "iu":
+        return cast(npt.NDArray[np.int_], ids.astype(int, copy=False))
+    if ids.dtype.kind != "f":
+        raise ValueError(
+            "Trace requires integer tracker ids, but Detections hold dtype "
+            f"{ids.dtype}."
+        )
+    integer_limit = float(np.iinfo(np.intp).max)
+    usable = np.isfinite(ids) & (ids == np.trunc(ids)) & (np.abs(ids) <= integer_limit)
+    if not np.all(usable):
+        raise ValueError(
+            "Trace requires integer tracker ids, but Detections hold "
+            f"{ids[~usable][:5].tolist()}. A fractional, non-finite or "
+            "out-of-range tracker_id cannot name one tracked object."
+        )
+    return cast(npt.NDArray[np.int_], ids.astype(int, copy=False))
+
+
 class Trace:
     def __init__(
         self,
@@ -620,8 +660,15 @@ class Trace:
         stayed shorter than the window is still joined to its pre-gap points.
 
         History is normalised on the way in: anchor points are stored as
-        `float32` and tracker ids are cast to NumPy's default integer dtype
-        (`np.int_`), so tracker ids outside that dtype's range are unsupported.
+        `float32` and tracker ids as NumPy's default integer dtype (`np.int_`).
+        A tracker id that is fractional, non-finite, or outside the `int64`
+        range cannot name one tracked object, so it raises `ValueError` rather
+        than being cast onto a neighbouring id.
+
+        Raises:
+            ValueError: If the detections carry no `tracker_id`.
+            ValueError: If a `tracker_id` is fractional, non-finite, or outside
+                the `int64` range.
         """
         if len(detections) == 0:
             xy: npt.NDArray[np.float32] = np.empty((0, 2), dtype=np.float32)
@@ -635,7 +682,7 @@ class Trace:
             xy = np.asarray(
                 detections.get_anchors_coordinates(self.anchor), dtype=np.float32
             )
-            tracker_id = np.asarray(detections.tracker_id, dtype=int)
+            tracker_id = _integral_tracker_ids(detections.tracker_id)
 
         frame_id: npt.NDArray[np.int_] = np.full(
             len(detections), self.current_frame_id, dtype=int

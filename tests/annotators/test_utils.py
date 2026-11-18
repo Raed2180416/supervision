@@ -672,6 +672,55 @@ class TestTraceEmptyFrames:
             trace.put(detections)
 
 
+class TestTraceTrackerIds:
+    """Tests for the tracker ids `Trace` accepts into its history."""
+
+    def test_fractional_tracker_ids_are_rejected(self) -> None:
+        """Casting 2.2 and 2.7 to int would merge two tracks into one trail."""
+        detections = Detections(
+            xyxy=np.array([[0, 0, 10, 10], [20, 20, 30, 30]], dtype=np.float32),
+            class_id=np.array([0, 0]),
+            tracker_id=np.array([2.2, 2.7]),
+        )
+        trace = Trace()
+
+        with pytest.raises(ValueError, match="fractional"):
+            trace.put(detections)
+
+    @pytest.mark.parametrize(
+        "tracker_id",
+        [
+            pytest.param(np.array([np.nan]), id="not-a-number"),
+            pytest.param(np.array([np.inf]), id="infinite"),
+            pytest.param(np.array([1e30]), id="beyond-int64"),
+        ],
+    )
+    def test_unusable_tracker_ids_are_rejected(self, tracker_id: np.ndarray) -> None:
+        """An id that is not a finite integer cannot name one tracked object."""
+        detections = Detections(
+            xyxy=np.array([[0, 0, 10, 10]], dtype=np.float32),
+            class_id=np.array([0]),
+            tracker_id=tracker_id,
+        )
+        trace = Trace()
+
+        with pytest.raises(ValueError, match="tracker_id"):
+            trace.put(detections)
+
+    def test_integral_float_tracker_ids_keep_their_trail(self) -> None:
+        """An integral float such as 3.0 names the same track as the integer 3."""
+        detections = Detections(
+            xyxy=np.array([[0, 0, 10, 10]], dtype=np.float32),
+            class_id=np.array([0]),
+            tracker_id=np.array([3.0]),
+        )
+        trace = Trace()
+
+        trace.put(detections)
+
+        assert np.array_equal(trace.get(tracker_id=3), np.array([[5.0, 5.0]]))
+
+
 class TestSnapBoxes:
     """Tests for `snap_boxes`, which moves label boxes into the frame."""
 
